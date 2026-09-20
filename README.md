@@ -155,6 +155,18 @@ npm start
 
 基线快照（保存时间、问题指纹、前后对比所需的路径与消息）以 `baseline` 字段**随剧情 JSON 一起持久化**，导出 / 导入 JSON 时一并携带；删除剧情即删除基线，也可单独「删除基线」。保存基线会同时把当前草稿落盘，保证基线与保存内容一致。
 
+## 目标路径查询
+
+编辑页右侧的「目标路径查询」面板回答另一类问题：**“怎样走才能在到达某场景时让指定变量为真 / 为假？”**
+
+1. 选择 **目标场景**，并可添加若干条 **到达约束**（变量 = true / false；不添加约束则只要求到达目标场景）；
+2. 后端在「场景 + 完整变量状态」的具体状态空间上执行 **可终止的 BFS**（与分析器相同的状态去重与约 100 万状态上限），返回 **满足约束的最短选项链及每步状态**（每个场景节点带到达时的完整变量取值，每条选项边带选择后的状态）；
+3. **无解时**返回与目标约束 **差异最少的可达状态**（目标场景上的到达状态优先，其次缺失变量更少、路径更短）、**缺失变量清单**（变量、期望值、实际值）以及到达该状态的 **最近路径**；目标场景本身不可达时，回退到全剧情中最接近约束的可达状态并明确标注；
+4. 若搜索因 **状态上限被截断**，结果以 `canAssertUnsolvable: false` 标明 **不能断言无解**（只有完整穷举后才敢下“无解”结论）；
+5. 查询针对的是 **编辑中的草稿**（不落盘）；剧情或查询条件被修改后，旧结果会标记为 **可能过期**，重新「查询路径」即可。
+
+响应要点：`found`（是否命中）、`depth`（选项链长度）、`path`（场景/选项交替的每步状态）、`finalState`；无解时 `closest`（差异最少状态、缺失变量 `missing`、最近路径 `path`）、`canAssertUnsolvable`、`truncated`、`statesExplored`。
+
 ## HTTP API
 
 | 方法 | 路径 | 说明 |
@@ -166,6 +178,8 @@ npm start
 | `DELETE` | `/api/stories/:id` | 删除剧情 |
 | `POST` | `/api/analyze` | 对请求体中的剧情直接分析（编辑时实时检查，不落盘） |
 | `GET` | `/api/stories/:id/analysis` | 分析已保存的剧情 |
+| `POST` | `/api/pathquery` | 目标路径查询：对请求体中的草稿剧情直接查询（不落盘），请求体 `{ story, query }` |
+| `POST` | `/api/stories/:id/pathquery` | 对已保存剧情做目标路径查询，请求体即 `query` |
 | `POST` | `/api/stories/:id/baseline` | 把请求体中的剧情分析结果保存为基线（同时落盘剧情），返回 `{ story, baseline, analysis }` |
 | `POST` | `/api/stories/:id/baseline/compare` | 基线对比；请求体可省略（对比已保存剧情）或传入编辑中的草稿，返回 `{ summary, items }` |
 | `DELETE` | `/api/stories/:id/baseline` | 删除基线（剧情内容不变） |
@@ -173,14 +187,17 @@ npm start
 
 对比结果 `summary` 形如 `{ total, new, fixed, persistent, changed }`；`items` 中每条为 `{ status, issue, before, changes }`（`issue` 为当前问题、`before` 为基线快照；`changes` 为 `['path']` / `['message']`）。每条问题都带 `fingerprint` 字段（16 位 SHA-1）。
 
+路径查询的 `query` 形如 `{ "targetScene": "throneRoom", "constraints": [{ "variable": "hasKey", "value": true }] }`；响应中 `found=true` 时含 `depth` / `path` / `finalState`，否则含 `closest`（差异最少状态、缺失变量 `missing`、最近路径）与 `canAssertUnsolvable`（为 `false` 表示因状态上限截断、不能断言无解）。
+
 ## 目录结构
 
 ```
 .
-├── server.js              # Express 入口与 REST API（含基线接口）
+├── server.js              # Express 入口与 REST API（含基线、目标路径查询接口）
 ├── src/
 │   ├── expression.js      # 布尔表达式递归下降解析器 / 求值 / 失败解释
 │   ├── analyzer.js        # 「场景+状态」BFS 传播去重分析引擎（附带问题指纹）
+│   ├── pathquery.js       # 目标路径查询：可终止 BFS 求最短选项链 / 差异最少可达状态
 │   ├── fingerprint.js     # 不依赖数组顺序的问题稳定指纹
 │   ├── baseline.js        # 基线快照构建与新增/已修复/仍存在/详情变化对比
 │   └── storage.js         # JSON 文件存储、首启播种、选项 UID 与基线持久化
@@ -194,6 +211,7 @@ npm start
 ├── test/
 │   ├── smoke.js           # 分析引擎自检（node test/smoke.js）
 │   ├── baseline.js        # 指纹 / 基线对比 / 持久化自检（node test/baseline.js）
+│   ├── pathquery.js       # 目标路径查询与 API 自检（node test/pathquery.js）
 │   └── healthcheck.js     # 健康检查探针回归测试（node test/healthcheck.js）
 ├── Dockerfile
 └── docker-compose.yml
@@ -202,7 +220,7 @@ npm start
 自检：
 
 ```bash
-npm test          # 依次运行 smoke.js 与 baseline.js
+npm test          # 依次运行 smoke.js、baseline.js、pathquery.js 与 healthcheck.js
 ```
 
 ## 技术栈

@@ -126,6 +126,24 @@
         <ul id="issueList" class="issue-list"></ul>
       </section>
 
+      <section id="pathQueryCard" class="card query-card" hidden>
+        <div class="card-head">
+          <h2>目标路径查询</h2>
+          <button id="btnRunPathQuery" class="btn btn-small btn-primary">查询路径</button>
+        </div>
+        <label class="field">
+          <span>目标场景</span>
+          <select id="pqTarget"></select>
+        </label>
+        <div class="field">
+          <span>到达时必须满足的变量（不添加则只要求到达目标场景）</span>
+          <div id="pqConstraints" class="assign-list"></div>
+          <button id="btnPqAddConstraint" class="btn btn-small">＋ 添加约束</button>
+        </div>
+        <div id="pqStale" class="diff-stale" hidden>⚠ 剧情或查询条件已修改，以下结果可能过期，请重新「查询路径」</div>
+        <div id="pqResult" class="pq-result"></div>
+      </section>
+
       <section id="detailPanel" class="card detail-card" hidden>
         <div class="card-head">
           <h2 id="detailTitle">问题详情</h2>

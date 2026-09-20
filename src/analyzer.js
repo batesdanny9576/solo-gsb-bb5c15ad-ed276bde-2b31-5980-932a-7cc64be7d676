@@ -572,4 +572,4 @@ function analyze(storyInput) {
   };
 }
 
-module.exports = { analyze, encodeState, decodeState, applyAssigns, MAX_STATES };
+module.exports = { analyze, encodeState, decodeState, applyAssigns, collectStateVars, MAX_STATES };

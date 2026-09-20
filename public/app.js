@@ -14,6 +14,10 @@ const state = {
   diffStale: false,     // 对比之后剧情又被编辑过
   detailItem: null,     // 详情面板当前展示的对比条目
   detailPathMode: 'after', // 详情中查看的路径：after（当前）/ before（基线）
+  pathQuery: { targetScene: '', constraints: [] }, // 目标路径查询条件（编辑中）
+  pathQueryResult: null,  // 最近一次路径查询结果
+  pathQueryStale: false,  // 查询之后剧情或查询条件又被修改过
+  _pqSig: null,           // 查询面板场景/变量签名（避免每次编辑都重建下拉框）
   dirty: false,
   saving: false,
 };
@@ -67,6 +71,10 @@ async function openStory(id) {
   state.diffFilter = 'all';
   state.diffStale = false;
   state.detailItem = null;
+  state.pathQuery = { targetScene: '', constraints: [] };
+  state.pathQueryResult = null;
+  state.pathQueryStale = false;
+  state._pqSig = null;
   $('storySelect').value = id;
   renderAll();
   await runAnalysis(false);
@@ -124,6 +132,10 @@ async function deleteStory() {
   state.diff = null;
   state.detailItem = null;
   state.diffStale = false;
+  state.pathQuery = { targetScene: '', constraints: [] };
+  state.pathQueryResult = null;
+  state.pathQueryStale = false;
+  state._pqSig = null;
   const next = await loadList();
   if (next) await openStory(next);
   else { renderAll(); toast('已删除'); }
@@ -167,6 +179,7 @@ function renderAll() {
   renderEditor();
   renderSaveStatus();
   renderAnalysis();
+  renderPathQueryPanel();
   renderDetail(null);
 }
 
@@ -466,9 +479,11 @@ let reanalyzeTimer = null;
 function markDirty(rerender) {
   state.dirty = true;
   if (state.diff) state.diffStale = true;
+  markPathQueryStale();
   renderSaveStatus();
   if (rerender) rerender();
   else renderAnalysis();
+  renderPathQueryPanel(); // 内部有签名缓存，场景/变量未变时仅刷新过期提示与结果
   clearTimeout(reanalyzeTimer);
   reanalyzeTimer = setTimeout(() => runAnalysis(true), 500);
 }
@@ -557,6 +572,222 @@ const DIFF_META = {
   persistent: { label: '仍存在', cls: 'diff-persistent' },
   changed: { label: '详情变化', cls: 'diff-changed' },
 };
+
+/* ============================================================
+ * 目标路径查询
+ * ============================================================ */
+function pqSignature() {
+  if (!state.story) return '';
+  return JSON.stringify([
+    state.story.scenes.map((s) => s.id),
+    state.story.variables.map((v) => v.name),
+  ]);
+}
+
+function markPathQueryStale() {
+  if (!state.pathQueryResult) return;
+  state.pathQueryStale = true;
+  const el = $('pqStale');
+  if (el) el.hidden = false;
+}
+
+function renderPathQueryPanel() {
+  const card = $('pathQueryCard');
+  if (!state.story) { card.hidden = true; return; }
+  card.hidden = false;
+
+  // 仅当场景集合 / 变量集合变化时才重建下拉框与约束行，避免打断正在进行的交互
+  const sig = pqSignature();
+  if (sig !== state._pqSig) {
+    state._pqSig = sig;
+    const sel = $('pqTarget');
+    sel.innerHTML = '';
+    const ph = document.createElement('option');
+    ph.value = '';
+    ph.textContent = '（选择目标场景）';
+    sel.appendChild(ph);
+    for (const s of state.story.scenes) {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      opt.textContent = `${s.id}${s.title ? ' — ' + s.title : ''}`;
+      sel.appendChild(opt);
+    }
+    if (state.pathQuery.targetScene &&
+        state.story.scenes.some((s) => s.id === state.pathQuery.targetScene)) {
+      sel.value = state.pathQuery.targetScene;
+    } else {
+      state.pathQuery.targetScene = '';
+      sel.value = '';
+    }
+    renderPqConstraints();
+  }
+
+  $('pqStale').hidden = !state.pathQueryStale;
+  renderPathQueryResult();
+}
+
+function renderPqConstraints() {
+  const box = $('pqConstraints');
+  box.innerHTML = '';
+  const varNames = state.story.variables.map((v) => v.name);
+  state.pathQuery.constraints.forEach((c, i) => {
+    const row = document.createElement('div');
+    row.className = 'assign-row';
+
+    const sel = document.createElement('select');
+    sel.innerHTML = '<option value="">（选择变量）</option>' +
+      varNames.map((n) => `<option value="${n}">${n}</option>`).join('');
+    sel.value = c.variable;
+    sel.addEventListener('change', () => { c.variable = sel.value; markPathQueryStale(); });
+
+    const eq = document.createElement('span');
+    eq.className = 'assign-arrow';
+    eq.textContent = '=';
+
+    const val = document.createElement('select');
+    val.innerHTML = '<option value="true">true</option><option value="false">false</option>';
+    val.value = c.value ? 'true' : 'false';
+    val.addEventListener('change', () => { c.value = val.value === 'true'; markPathQueryStale(); });
+
+    const del = document.createElement('button');
+    del.textContent = '✕';
+    del.title = '删除约束';
+    del.addEventListener('click', () => {
+      state.pathQuery.constraints.splice(i, 1);
+      renderPqConstraints();
+      markPathQueryStale();
+    });
+
+    row.append(sel, eq, val, del);
+    box.appendChild(row);
+  });
+}
+
+async function runPathQuery() {
+  if (!state.story) return;
+  const targetScene = state.pathQuery.targetScene;
+  if (!targetScene) return toast('请先选择目标场景');
+  const constraints = state.pathQuery.constraints.filter((c) => c.variable);
+  try {
+    const result = await api('POST', '/api/pathquery', {
+      story: state.story,
+      query: { targetScene, constraints },
+    });
+    state.pathQueryResult = result;
+    state.pathQueryStale = false;
+    renderPathQueryPanel();
+  } catch (e) {
+    toast(`路径查询失败：${e.message}`);
+  }
+}
+
+/** 查询结果中的路径视图：场景节点带到达时状态，选项边带选择后状态 */
+function buildQueryPathView(path, knownVars, found) {
+  const wrap = document.createElement('div');
+  wrap.className = 'path-view';
+  (path || []).forEach((node, i, arr) => {
+    if (node.kind === 'scene') {
+      const div = document.createElement('div');
+      div.className = 'path-node scene';
+      const badge = i === 0 ? '<span class="badge badge-ok">起点</span>'
+        : (found && i === arr.length - 1 ? '<span class="badge badge-ok">目标</span>' : '');
+      div.innerHTML = `<span class="pn-title"></span><span class="pn-id"></span>${badge}`;
+      div.querySelector('.pn-title').textContent = node.title || node.sceneId;
+      div.querySelector('.pn-id').textContent = node.sceneId;
+      div.insertAdjacentHTML('beforeend', stateChips(node.state, knownVars || []));
+      wrap.appendChild(div);
+    } else {
+      const div = document.createElement('div');
+      div.className = 'path-edge';
+      div.textContent = `选项 ${node.optionIndex + 1}「${node.optionText || ''}」 → ${node.target}`;
+      if (node.stateAfter) {
+        div.insertAdjacentHTML('beforeend', stateChips(node.stateAfter, knownVars || []));
+      }
+      wrap.appendChild(div);
+    }
+  });
+  return wrap;
+}
+
+function appendQueryNotes(box, r) {
+  const notes = [];
+  if (r.startBlocked) {
+    notes.push('起点场景的前置条件在初始状态下不成立，剧情无法开始，没有任何可达状态。');
+  }
+  if (r.unknownConstraintVars && r.unknownConstraintVars.length) {
+    notes.push(`约束变量 ${r.unknownConstraintVars.join('、')} 未声明且从未被赋值，在状态中恒为 false。`);
+  }
+  if (r.conditionErrors && r.conditionErrors.length) {
+    notes.push(`剧情中存在 ${r.conditionErrors.length} 处条件语法错误，本次查询按恒真处理（详见一致性分析）。`);
+  }
+  for (const text of notes) {
+    const div = document.createElement('div');
+    div.className = 'pq-note';
+    div.textContent = text;
+    box.appendChild(div);
+  }
+}
+
+function renderPathQueryResult() {
+  const box = $('pqResult');
+  box.innerHTML = '';
+  const r = state.pathQueryResult;
+  if (!r || !state.story) return;
+
+  const banner = document.createElement('div');
+  if (r.found) {
+    banner.className = 'pq-banner pq-ok';
+    banner.textContent = `✓ 找到最短选项链（${r.depth} 步），到达「${r.targetScene}」时满足全部约束`;
+    box.appendChild(banner);
+    appendQueryNotes(box, r);
+    box.appendChild(buildQueryPathView(r.path, r.knownVars, true));
+    return;
+  }
+
+  banner.className = 'pq-banner ' + (r.canAssertUnsolvable ? 'pq-err' : 'pq-warn');
+  banner.textContent = r.canAssertUnsolvable
+    ? `✗ 无解：已穷举全部 ${r.statesExplored} 个可达状态，不存在满足约束的到达状态`
+    : `⚠ 未找到满足约束的到达状态；状态数达到上限（已探索 ${r.statesExplored} 个）搜索被截断，不能断言无解`;
+  box.appendChild(banner);
+  appendQueryNotes(box, r);
+
+  const c = r.closest;
+  if (!c) return;
+
+  const head = document.createElement('div');
+  head.className = 'pq-closest-head';
+  const lead = document.createElement('b');
+  lead.textContent = '差异最少的可达状态';
+  const desc = document.createElement('span');
+  desc.textContent = c.isTargetScene
+    ? `：目标场景「${c.sceneId}」第 ${c.depth} 步的到达状态`
+    : `：目标场景「${r.targetScene}」不可达；全剧情中最接近约束的是场景「${c.sceneId}」（第 ${c.depth} 步）`;
+  head.append(lead, desc);
+  box.appendChild(head);
+
+  if (c.missing && c.missing.length) {
+    const miss = document.createElement('div');
+    miss.className = 'pq-missing';
+    const label = document.createElement('span');
+    label.className = 'pq-missing-label';
+    label.textContent = '缺失变量：';
+    miss.appendChild(label);
+    for (const m of c.missing) {
+      const chip = document.createElement('code');
+      chip.className = 'pq-missing-chip';
+      chip.textContent = `${m.variable} 需 ${m.want}（实际 ${m.actual}）`;
+      miss.appendChild(chip);
+    }
+    box.appendChild(miss);
+  } else {
+    const okNote = document.createElement('div');
+    okNote.className = 'pq-note';
+    okNote.textContent = '该状态下全部约束均满足，但它不在目标场景上——请检查通往目标场景的跳转。';
+    box.appendChild(okNote);
+  }
+  box.appendChild(buildQueryPathView(c.path, r.knownVars, false));
+}
+
 
 function fmtTime(iso) {
   if (!iso) return '';
@@ -960,6 +1191,18 @@ function bindGlobalEvents() {
   $('btnSaveBaseline').addEventListener('click', saveBaseline);
   $('btnRunCompare').addEventListener('click', runCompare);
   $('btnClearBaseline').addEventListener('click', clearBaseline);
+  $('btnRunPathQuery').addEventListener('click', runPathQuery);
+  $('btnPqAddConstraint').addEventListener('click', () => {
+    if (!state.story) return;
+    const firstVar = state.story.variables[0];
+    state.pathQuery.constraints.push({ variable: firstVar ? firstVar.name : '', value: true });
+    renderPqConstraints();
+    markPathQueryStale();
+  });
+  $('pqTarget').addEventListener('change', (e) => {
+    state.pathQuery.targetScene = e.target.value;
+    markPathQueryStale();
+  });
 
   // Ctrl/Cmd + S 保存
   document.addEventListener('keydown', (e) => {

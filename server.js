@@ -4,6 +4,7 @@ const express = require('express');
 const path = require('path');
 const storage = require('./src/storage');
 const { analyze } = require('./src/analyzer');
+const { queryPath } = require('./src/pathquery');
 const { buildBaseline, compareWithBaseline } = require('./src/baseline');
 
 const app = express();
@@ -52,6 +53,23 @@ app.get('/api/stories/:id/analysis', wrap((req, res) => {
   const story = storage.getStory(req.params.id);
   if (!story) return res.status(404).json({ error: '剧情不存在' });
   res.json(analyze(story));
+}));
+
+// ---- 目标路径查询：对请求体中的草稿剧情直接查询（不落盘），供编辑页查询面板实时使用 ----
+// 请求体：{ story: <剧情>, query: { targetScene, constraints: [{ variable, value }] } }
+app.post('/api/pathquery', wrap((req, res) => {
+  const body = req.body || {};
+  const story = body.story !== undefined ? body.story : body;
+  res.json(queryPath(story, body.query || {}));
+}));
+
+// ---- 对已保存的剧情做目标路径查询 ----
+app.post('/api/stories/:id/pathquery', wrap((req, res) => {
+  const story = storage.getStory(req.params.id);
+  if (!story) return res.status(404).json({ error: '剧情不存在' });
+  const body = req.body || {};
+  const query = body.query !== undefined ? body.query : body;
+  res.json(queryPath(story, query));
 }));
 
 // ---- 分析基线：把当前（通常是编辑中的）分析结果保存为基线，随剧情 JSON 持久化 ----
@@ -127,9 +145,12 @@ storage.ensureDataDir();
 const seeded = storage.seedSamples();
 if (seeded.length) console.log(`[seed] 已初始化示例剧情: ${seeded.join(', ')}`);
 
-app.listen(PORT, HOST, () => {
-  console.log(`分支剧情一致性审校应用已启动: http://${HOST}:${PORT}`);
-  console.log(`数据目录: ${storage.DATA_DIR}`);
-});
+// 直接 `node server.js` 时启动监听；被测试 require 时仅导出 app（由测试自行监听）
+if (require.main === module) {
+  app.listen(PORT, HOST, () => {
+    console.log(`分支剧情一致性审校应用已启动: http://${HOST}:${PORT}`);
+    console.log(`数据目录: ${storage.DATA_DIR}`);
+  });
+}
 
 module.exports = app;
