@@ -126,6 +126,24 @@
         <ul id="issueList" class="issue-list"></ul>
       </section>
 
+      <section class="card query-card" id="queryCard">
+        <div class="card-head">
+          <h2>目标路径查询</h2>
+          <button id="btnRunQuery" class="btn btn-small btn-primary">查询路径</button>
+        </div>
+        <label class="field">
+          <span>目标场景</span>
+          <select id="queryTarget"></select>
+        </label>
+        <div class="field">
+          <span>到达时必须满足的变量（可留空，表示只要求到达该场景）</span>
+          <div id="queryConstraints" class="assign-list"></div>
+          <button id="btnAddConstraint" class="btn btn-small">＋ 添加条件</button>
+        </div>
+        <div id="queryStale" class="diff-stale" hidden>⚠ 剧情已修改，以下查询结果可能过期，请重新「查询路径」</div>
+        <div id="queryResult" class="query-result"></div>
+      </section>
+
       <section id="detailPanel" class="card detail-card" hidden>
         <div class="card-head">
           <h2 id="detailTitle">问题详情</h2>

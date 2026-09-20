@@ -4,6 +4,7 @@ const express = require('express');
 const path = require('path');
 const storage = require('./src/storage');
 const { analyze } = require('./src/analyzer');
+const { findPath } = require('./src/pathquery');
 const { buildBaseline, compareWithBaseline } = require('./src/baseline');
 
 const app = express();
@@ -52,6 +53,25 @@ app.get('/api/stories/:id/analysis', wrap((req, res) => {
   const story = storage.getStory(req.params.id);
   if (!story) return res.status(404).json({ error: '剧情不存在' });
   res.json(analyze(story));
+}));
+
+// ---- 目标路径查询：对请求体中的草稿剧情直接查询（不落盘，供编辑页使用） ----
+// 请求体：{ story: {...}, query: { targetScene, constraints: [{ variable, value }] } }
+app.post('/api/path-query', wrap((req, res) => {
+  const body = req.body || {};
+  const story = body.story !== undefined ? body.story : null;
+  if (!story || typeof story !== 'object') {
+    return res.status(400).json({ error: '缺少剧情内容（story）' });
+  }
+  res.json(findPath(story, body.query || {}));
+}));
+
+// ---- 目标路径查询：对已保存的剧情 ----
+// 请求体即查询参数：{ targetScene, constraints: [{ variable, value }] }
+app.post('/api/stories/:id/path-query', wrap((req, res) => {
+  const story = storage.getStory(req.params.id);
+  if (!story) return res.status(404).json({ error: '剧情不存在' });
+  res.json(findPath(story, req.body || {}));
 }));
 
 // ---- 分析基线：把当前（通常是编辑中的）分析结果保存为基线，随剧情 JSON 持久化 ----

@@ -204,8 +204,26 @@ code {
 .opt-status { font-size: 11px; font-weight: 600; }
 
 /* ---------- 右栏分析 ---------- */
-.analysis-card { max-height: 55%; display: flex; flex-direction: column; }
+.analysis-card { max-height: 45%; display: flex; flex-direction: column; }
 .analysis-card > .issue-list { overflow: auto; }
+
+/* ---------- 目标路径查询 ---------- */
+.query-card { max-height: 45%; display: flex; flex-direction: column; }
+.query-card .query-result { overflow: auto; }
+.query-result { display: flex; flex-direction: column; gap: 7px; margin-top: 4px; }
+.query-verdict { border-radius: 8px; padding: 8px 10px; font-size: 13px; font-weight: 700; }
+.query-verdict.ok { background: var(--ok-bg); color: var(--ok); }
+.query-verdict.fail { background: var(--danger-bg); color: var(--danger); }
+.query-meta { font-size: 11px; color: var(--muted); }
+.query-note { font-size: 12px; color: var(--muted); line-height: 1.5; }
+.query-note.warn { color: var(--warning); background: var(--warning-bg); border-radius: 6px; padding: 5px 8px; }
+.query-path { border: 1px solid var(--border); border-radius: 8px; padding: 6px; }
+.missing-list { display: flex; flex-direction: column; gap: 4px; }
+.missing-item {
+  font-size: 12px; background: var(--danger-bg); color: var(--danger);
+  border-radius: 6px; padding: 3px 8px;
+}
+.missing-item code { background: rgba(255,255,255,.7); }
 
 /* 分析基线工具栏 */
 .baseline-bar {
@@ -367,6 +385,6 @@ code {
 @media (max-width: 1100px) {
   .layout { grid-template-columns: 1fr; height: auto; }
   .pane { min-height: auto; }
-  .analysis-card { max-height: none; }
+  .analysis-card, .query-card { max-height: none; }
   html, body { height: auto; }
 }

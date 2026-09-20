@@ -17,6 +17,16 @@
 1. **最接近的可达路径**：从起点到问题点的最短选项链（含每一步的变量状态）；
 2. **未满足的条件解释树**：逐层标注每个子条件的期望值 / 实际值，并给出 **最少只需翻转哪些变量** 即可让条件成立，帮助定位是哪条状态赋值缺失或冲突。
 
+## 目标路径查询
+
+右栏「目标路径查询」面板支持正向检索：**选择一个目标场景，并添加若干「到达时必须为真 / 为假」的变量约束**（约束可留空，即只要求到达该场景），点击「查询路径」后，后端在「场景 + 完整变量状态」的具体状态空间上执行可终止的 BFS（与一致性分析同一套状态编码，含环路剧情也必然终止）：
+
+- **有解**：返回满足全部约束的 **最短选项链**，并展示路径上每一步（每个场景节点）的完整变量状态；
+- **无解**：返回与目标约束 **差异最少的可达状态**（不匹配的约束变量数最少，并列时取步数更短者）、**缺失变量清单**（每个变量的期望值与实际值）以及对应的 **最近路径**；若目标场景本身不可达会单独说明；
+- **状态上限截断**：枚举状态数触及安全上限（约 100 万）时搜索截断，结果以 `truncated` / `canAssertUnsatisfiable=false` 明确标注 **「不能断言无解」**，此时展示的最接近结果仅覆盖已探索部分；未截断且未命中时才可断言无解。
+
+查询针对 **当前编辑中的草稿** 执行（不落盘）；查询之后只要剧情有任何改动，旧结果即被标记为 **「可能过期」**，重新点击「查询路径」即可刷新。
+
 ## 一条命令启动（需要 Docker + Docker Compose）
 
 ```bash
@@ -165,6 +175,8 @@ npm start
 | `PUT` | `/api/stories/:id` | 保存（整体覆盖） |
 | `DELETE` | `/api/stories/:id` | 删除剧情 |
 | `POST` | `/api/analyze` | 对请求体中的剧情直接分析（编辑时实时检查，不落盘） |
+| `POST` | `/api/path-query` | 目标路径查询：对请求体 `{ story, query }` 中的草稿剧情查询（不落盘） |
+| `POST` | `/api/stories/:id/path-query` | 对已保存剧情做目标路径查询，请求体即 `query` |
 | `GET` | `/api/stories/:id/analysis` | 分析已保存的剧情 |
 | `POST` | `/api/stories/:id/baseline` | 把请求体中的剧情分析结果保存为基线（同时落盘剧情），返回 `{ story, baseline, analysis }` |
 | `POST` | `/api/stories/:id/baseline/compare` | 基线对比；请求体可省略（对比已保存剧情）或传入编辑中的草稿，返回 `{ summary, items }` |
@@ -173,14 +185,27 @@ npm start
 
 对比结果 `summary` 形如 `{ total, new, fixed, persistent, changed }`；`items` 中每条为 `{ status, issue, before, changes }`（`issue` 为当前问题、`before` 为基线快照；`changes` 为 `['path']` / `['message']`）。每条问题都带 `fingerprint` 字段（16 位 SHA-1）。
 
+目标路径查询的 `query` 形如 `{ targetScene: 'sceneId', constraints: [{ variable: 'hasKey', value: true }] }`（`constraints` 可省略或为空，也兼容 `{ hasKey: true }` 的对象映射形式）。响应要点：
+
+| 字段 | 含义 |
+| --- | --- |
+| `found` / `depth` / `path` | 是否命中；命中时 `depth` 为最短步数，`path` 为场景 / 选项交替的节点链，场景节点带该步完整变量状态 |
+| `truncated` / `canAssertUnsatisfiable` | 是否因状态上限截断；未命中且未截断时 `canAssertUnsatisfiable=true`，可断言无解 |
+| `closest` | 未命中时差异最少的可达状态：`{ depth, state, missing:[{variable,want,actual}], path }` |
+| `sceneReachable` / `startBlocked` | 目标场景是否可达 / 起点是否被自身前置条件挡住 |
+| `statesExplored` / `maxStates` | 实际枚举的具体状态数与上限 |
+
+查询参数不合法（缺 `targetScene`、同一变量被同时要求为真和假等）返回 400；剧情侧问题（目标场景不存在、未指定起点等）以 200 + `{ ok:false, error }` 返回。
+
 ## 目录结构
 
 ```
 .
-├── server.js              # Express 入口与 REST API（含基线接口）
+├── server.js              # Express 入口与 REST API（含基线接口、目标路径查询接口）
 ├── src/
 │   ├── expression.js      # 布尔表达式递归下降解析器 / 求值 / 失败解释
 │   ├── analyzer.js        # 「场景+状态」BFS 传播去重分析引擎（附带问题指纹）
+│   ├── pathquery.js       # 目标路径查询：约束最短链 / 最接近状态 / 截断标注
 │   ├── fingerprint.js     # 不依赖数组顺序的问题稳定指纹
 │   ├── baseline.js        # 基线快照构建与新增/已修复/仍存在/详情变化对比
 │   └── storage.js         # JSON 文件存储、首启播种、选项 UID 与基线持久化
@@ -194,7 +219,8 @@ npm start
 ├── test/
 │   ├── smoke.js           # 分析引擎自检（node test/smoke.js）
 │   ├── baseline.js        # 指纹 / 基线对比 / 持久化自检（node test/baseline.js）
-│   └── healthcheck.js     # 健康检查探针回归测试（node test/healthcheck.js）
+│   ├── healthcheck.js     # 健康检查探针回归测试（node test/healthcheck.js）
+│   └── pathquery.js       # 目标路径查询单元 + HTTP 集成自检（node test/pathquery.js）
 ├── Dockerfile
 └── docker-compose.yml
 ```
@@ -202,7 +228,7 @@ npm start
 自检：
 
 ```bash
-npm test          # 依次运行 smoke.js 与 baseline.js
+npm test          # 依次运行 smoke.js、baseline.js、healthcheck.js 与 pathquery.js
 ```
 
 ## 技术栈
